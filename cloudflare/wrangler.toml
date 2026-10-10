@@ -1,0 +1,24 @@
+name = "auto-agent"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "MEMORY"
+database_name = "auto_memory"
+database_id = "70a81d9e-2d72-408f-b708-7aab08ad06aa"
+migrations_dir = "migrations"
+
+# NOTE: no R2 binding — the worker uses D1 + Queues only, and this
+# account's token has no R2 permission. Local artifacts stay in data/.
+
+[[queues.producers]]
+binding = "JOBS"
+queue = "auto-jobs"
+
+[[queues.consumers]]
+queue = "auto-jobs"
+max_batch_size = 5
+
+# cron: wake agent every 5 min
+# [triggers]
+# crons = ["*/5 * * * *"]

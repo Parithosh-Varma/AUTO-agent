@@ -6,11 +6,14 @@ const state={tab:"overview",page:1,per:25,f:{},demo:null,timer:null,lastOk:0};
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const token=()=>sessionStorage.getItem("dash_token")||"";
 const demoMode=()=>new URLSearchParams(location.search).has("demo");
+// API base injected at deploy time via config.js (public worker URL, not a secret).
+// Empty = same-origin (local `main.py --dashboard` or Pages Functions proxy).
+const BASE=(window.API_BASE||"").replace(/\/$/,"");
 
 async function api(path,opts){
   opts=opts||{};
   opts.headers=Object.assign({"Authorization":"Bearer "+token()},opts.headers||{});
-  const r=await fetch(path,opts);
+  const r=await fetch(BASE+path,opts);
   if(r.status===401){showErr("unauthorized — set the operator token");throw new Error("auth");}
   if(!r.ok){const t=await r.text().catch(()=> "");throw new Error("HTTP "+r.status+" "+t.slice(0,120));}
   return r.json();
@@ -25,7 +28,7 @@ function bar(pct,cls){pct=Math.max(0,Math.min(100,pct));return '<div class="bar"
 async function load(){
   showErr(null);
   if(demoMode()&&!state.demo){
-    try{const r=await fetch("export.json");state.demo=await r.json();$("#demoBanner").hidden=false;}
+    try{const r=await fetch(BASE+"/export.json");state.demo=await r.json();$("#demoBanner").hidden=false;}
     catch(e){showErr("demo snapshot missing — run main.py --export and place export.json next to index.html");}
   }
   try{

@@ -1,0 +1,10 @@
+-- 0000_base.sql — base agent tables. Must apply before 0001_observability.sql.
+-- Mirrors the original local SQLite schema (memory.py) for fresh D1 databases.
+CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS goals (id INTEGER PRIMARY KEY AUTOINCREMENT, description TEXT NOT NULL, novelty REAL DEFAULT 0, feasibility REAL DEFAULT 0, usefulness REAL DEFAULT 0, cost REAL DEFAULT 0, score REAL DEFAULT 0, status TEXT DEFAULT 'proposed', created_at REAL DEFAULT 0, updated_at REAL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id INTEGER DEFAULT 0, name TEXT NOT NULL, repo TEXT DEFAULT '', url TEXT DEFAULT '', status TEXT DEFAULT 'idea', created_at REAL DEFAULT 0, updated_at REAL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS actions (id INTEGER PRIMARY KEY AUTOINCREMENT, cycle INTEGER DEFAULT 0, tool TEXT NOT NULL, op TEXT NOT NULL, input_json TEXT DEFAULT '{}', ok INTEGER DEFAULT 1, output_text TEXT DEFAULT '', created_at REAL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS experiments (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, hypothesis TEXT DEFAULT '', result TEXT DEFAULT '', created_at REAL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT, dodo_payment_id TEXT UNIQUE NOT NULL, amount REAL NOT NULL, currency TEXT DEFAULT 'USD', status TEXT DEFAULT 'unknown', is_test INTEGER DEFAULT 1, is_refunded INTEGER DEFAULT 0, is_self_purchase INTEGER DEFAULT 0, origin TEXT DEFAULT 'manual', raw_json TEXT DEFAULT '{}', verified_at REAL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS queue (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT DEFAULT '{}', status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, dedupe_key TEXT DEFAULT NULL, created_at REAL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, dedupe_key TEXT UNIQUE NOT NULL, event_type TEXT NOT NULL, message TEXT NOT NULL, status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, next_retry_at REAL DEFAULT 0, created_at REAL DEFAULT 0, sent_at REAL DEFAULT 0);
