@@ -53,9 +53,9 @@ class Config:
     cycle_sleep_seconds: int = 5
     data_dir: str = "./data"
     kill_switch_file: str = "./data/STOP"
-    llm_base_url: str = "https://api.openai.com/v1"
+    llm_base_url: str = "https://integrate.api.nvidia.com/v1"
     llm_api_key: str = ""
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "meta/muse-glimmer-30b"
     github_token: str = ""
     allowed_repos: tuple = ()
     cf_api_token: str = ""
@@ -101,9 +101,10 @@ def get_config() -> Config:
         cycle_sleep_seconds=_int("CYCLE_SLEEP_SECONDS", 5),
         data_dir=_get("DATA_DIR", "./data"),
         kill_switch_file=_get("KILL_SWITCH_FILE", "./data/STOP"),
-        llm_base_url=_get("LLM_BASE_URL", "https://api.openai.com/v1"),
+        # NVIDIA NIM endpoint; meta/muse-glimmer-30b is the only allowed model.
+        llm_base_url=_get("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
         llm_api_key=_get("LLM_API_KEY", ""),
-        llm_model=_get("LLM_MODEL", "gpt-4o-mini"),
+        llm_model=_get("LLM_MODEL", "meta/muse-glimmer-30b"),
         github_token=_get("GITHUB_TOKEN", ""),
         allowed_repos=allowed,
         cf_api_token=_get("CF_API_TOKEN", ""),

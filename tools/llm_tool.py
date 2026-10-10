@@ -42,9 +42,12 @@ class LLMTool:
             text = payload["choices"][0]["message"]["content"]
             return ToolResult(ok=True, output=text, data={"model": self.cfg.llm_model})
         except Exception as e:
-            # fail soft: mock keeps loop alive, error is logged
-            return ToolResult(ok=True, output=self._mock(prompt),
-                              data={"mock_fallback": True, "error": str(e)})
+            # Strict mode: a configured key must never be silently replaced by
+            # mock output. Fail the call so the supervisor records a real
+            # failure instead of the loop acting on fabricated content.
+            return ToolResult(ok=False,
+                              output=f"llm call failed ({self.cfg.llm_model}): {e}",
+                              data={"model": self.cfg.llm_model, "error": str(e)})
 
     def _mock(self, prompt):
         p = prompt.lower()

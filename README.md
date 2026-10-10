@@ -40,7 +40,7 @@ python3 main.py --status
 | `MAX_CONSECUTIVE_FAILURES` | `25` | Failure streak cap |
 | `CYCLE_SLEEP_SECONDS` | `5` | Pause between daemon cycles |
 | `DATA_DIR` / `KILL_SWITCH_FILE` | `./data`, `./data/STOP` | State dir / external kill switch |
-| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | — | OpenAI-compatible; blank = mock |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | `https://integrate.api.nvidia.com/v1`, —, `meta/muse-glimmer-30b` | NVIDIA NIM; muse-glimmer-30b only; blank key = mock |
 | `GITHUB_TOKEN`, `AGENT_ALLOWED_REPOS` | — | Blank = dry-run mirror; else allowlist-only |
 | `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `CF_ZONE_ID` | — | Blank = local artifacts; else verify + wrangler |
 | `DODO_API_KEY`, `DODO_MODE`, `DODO_BASE_URL` | `test` | Blank = dry-run (cannot succeed); live needs approval |
@@ -120,7 +120,7 @@ Do not deploy to production or enable live payments without required approval.
 | Revenue verification logic (exclusions, idempotency, origin gate) | **Verified** (unit-tested, no key needed) |
 | Deadline / crash recovery / limits / termination | **Verified** (unit-tested incl. real `data/agent.db` migration) |
 | `cloudflare/worker.js` syntax | **Verified** (`node --check`) |
-| LLM (OpenAI-compatible) | **Mocked** — `LLM_API_KEY` empty, mock fallback active |
+| LLM (NVIDIA NIM) | **Mocked** — `LLM_API_KEY` empty; with a key, `meta/muse-glimmer-30b` only, no fallback |
 | GitHub API | **Awaiting credentials** — needs valid `GITHUB_TOKEN` + `AGENT_ALLOWED_REPOS`; dry-run mirror only |
 | Cloudflare API | **Awaiting credentials** — `CF_API_TOKEN` empty, local artifacts only |
 | Dodo Payments API | **Awaiting credentials** — `DODO_API_KEY` empty, dry-run (cannot reach $25 by design) |
@@ -141,7 +141,7 @@ memory.py            SQLite store (D1-compatible) + protected keys + idempotent 
 supervisor.py        deadline, split spend/failure limits, kill switch, terminal states
                      + pause/resume/stop (Telegram routes through these)
 tools/base.py        ToolResult + audited registry
-tools/llm_tool.py    OpenAI-compatible LLM, mock fallback
+tools/llm_tool.py    NVIDIA NIM LLM (muse-glimmer-30b), mock when keyless
 tools/github_tool.py allowlist-only, dry-run mirror
 tools/cloudflare_tool.py  deploy/r2/queue abstractions
 tools/dodo_tool.py   authenticated verification only (origin-gated)
