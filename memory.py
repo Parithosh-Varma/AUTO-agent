@@ -89,6 +89,17 @@ CREATE TABLE IF NOT EXISTS queue (
   dedupe_key TEXT DEFAULT NULL,
   created_at REAL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dedupe_key TEXT UNIQUE NOT NULL,
+  event_type TEXT NOT NULL,
+  message TEXT NOT NULL,
+  status TEXT DEFAULT 'pending',
+  attempts INTEGER DEFAULT 0,
+  next_retry_at REAL DEFAULT 0,
+  created_at REAL DEFAULT 0,
+  sent_at REAL DEFAULT 0
+);
 """
 
 
@@ -288,6 +299,46 @@ class Store:
     def total_failures(self):
         row = self.conn.execute("SELECT COUNT(*) AS c FROM actions WHERE ok=0").fetchone()
         return int(row["c"] or 0)
+
+    # --- notifications outbox (Telegram; delivery confirmed only by API) ---
+    def queue_notification(self, dedupe_key, event_type, message):
+        now = time.time()
+        try:
+            cur = self.conn.execute(
+                "INSERT INTO notifications(dedupe_key,event_type,message,status,attempts,"
+                " next_retry_at,created_at,sent_at) VALUES(?,?,?, 'pending',0,?, ?,0)",
+                (dedupe_key, event_type, message, now, now),
+            )
+            self.conn.commit()
+            return cur.lastrowid, True
+        except sqlite3.IntegrityError:
+            row = self.conn.execute(
+                "SELECT id, status FROM notifications WHERE dedupe_key=?", (dedupe_key,)
+            ).fetchone()
+            return (row["id"], False) if row else (None, False)
+
+    def due_notifications(self, now=None, limit=10):
+        now = time.time() if now is None else now
+        rows = self.conn.execute(
+            "SELECT * FROM notifications WHERE status IN ('pending','failed')"
+            " AND next_retry_at<=? ORDER BY id ASC LIMIT ?", (now, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_notification_sent(self, nid):
+        self.conn.execute(
+            "UPDATE notifications SET status='sent', sent_at=? WHERE id=?", (time.time(), nid))
+        self.conn.commit()
+
+    def mark_notification_failed(self, nid, attempts, next_retry_at):
+        self.conn.execute(
+            "UPDATE notifications SET status='failed', attempts=?, next_retry_at=? WHERE id=?",
+            (attempts, next_retry_at, nid))
+        self.conn.commit()
+
+    def notification_counts(self):
+        rows = self.conn.execute(
+            "SELECT status, COUNT(*) AS c FROM notifications GROUP BY status").fetchall()
+        return {r["status"]: r["c"] for r in rows}
 
     # --- payments (mirror of verified Dodo records) ---
     def upsert_payment(self, dodo_payment_id, amount, currency="USD", status="unknown",

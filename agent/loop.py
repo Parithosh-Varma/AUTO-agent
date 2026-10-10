@@ -14,15 +14,43 @@ INFRA_COST_PER_DEPLOY = 0.01
 
 
 class AutonomousLoop:
-    def __init__(self, config, store, supervisor, registry, brain, dodo_tool):
+    def __init__(self, config, store, supervisor, registry, brain, dodo_tool,
+                 notifier=None, commands=None):
         self.cfg = config
         self.store = store
         self.sup = supervisor
         self.reg = registry
         self.brain = brain
         self.dodo = dodo_tool
+        self.notifier = notifier
+        self.commands = commands
+
+    def _poll(self):
+        try:
+            if self.commands is not None:
+                self.commands.poll_and_handle()
+        except Exception:
+            pass
+
+    def _observe(self, tool, op, res, cycle):
+        # Telegram event detectors. Never allowed to break the loop.
+        try:
+            if self.notifier is None:
+                return
+            self.notifier.check_missing_credential(tool, op, res.output)
+            if not res.ok:
+                self.notifier.check_failures(f"{tool}.{op}", res.output, cycle)
+            else:
+                # success clears tool-failure blockers so recovery is announced
+                self.notifier.clear_blocker(f"failures:{tool}.{op}")
+                self.notifier.clear_blocker(f"failures:{tool}")
+            self.notifier.check_spend(self.sup._usage())
+            self.notifier.flush(limit=5)
+        except Exception:
+            pass
 
     def cycle(self, cycle):
+        self._poll()
         self.sup.check(cycle)
         # terminal guard: no new revenue-seeking tasks after target/deadline
         term = self.sup.terminal_reason()
@@ -50,6 +78,7 @@ class AutonomousLoop:
                            tool_calls=1,
                            llm_spend_usd=llm_spend + generic,
                            infra_spend_usd=infra_spend)
+        self._observe(tool, op, res, cycle)
 
         # periodic hard verification (every 3 cycles + after monetize ops)
         verified = gross_before

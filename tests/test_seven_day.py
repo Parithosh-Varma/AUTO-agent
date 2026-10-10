@@ -102,7 +102,7 @@ class TestCrashRecovery(unittest.TestCase):
         d = tempfile.mkdtemp()
         fresh_env(d)
         from main import build_system
-        cfg, store, sup, loop = build_system()
+        cfg, store, sup, loop, _, _ = build_system()
         started = sup.started_at
         loop.run(max_cycles=3, sleep=False)
         cycle_before = store.get_state("cycle", 0)
@@ -110,7 +110,7 @@ class TestCrashRecovery(unittest.TestCase):
         self.assertEqual(cycle_before, 3)
         # simulate crash: drop objects, rebuild from same dir
         store.close()
-        cfg2, store2, sup2, loop2 = build_system()
+        cfg2, store2, sup2, loop2, _, _ = build_system()
         self.assertEqual(store2.get_state("cycle", 0), 3)
         self.assertEqual(store2.get_state("usage", {}), usage_before)
         self.assertEqual(sup2.started_at, started)
@@ -174,7 +174,7 @@ class TestRevenueVerification(unittest.TestCase):
         fresh_env(d)
         os.environ["DODO_API_KEY"] = ""
         from main import build_system
-        cfg, store, sup, loop = build_system()
+        cfg, store, sup, loop, _, _ = build_system()
         # attacker inserts manual row directly
         store.upsert_payment("evil", 25, "USD", "succeeded", 0, 0, 0, {}, origin="manual")
         self.assertEqual(store.verified_gross(), 0.0)
@@ -256,7 +256,7 @@ class TestSafeTermination(unittest.TestCase):
         d = tempfile.mkdtemp()
         fresh_env(d)
         from main import build_system
-        cfg, store, sup, loop = build_system()
+        cfg, store, sup, loop, _, _ = build_system()
         store.upsert_payment("win", 25, "USD", "succeeded", 0, 0, 0, {}, origin="dodo_api")
         with self.assertRaises(SupervisorError):
             sup.check(int(store.get_state("cycle", 0) or 0))
@@ -271,7 +271,7 @@ class TestSafeTermination(unittest.TestCase):
         d = tempfile.mkdtemp()
         fresh_env(d)
         from main import build_system
-        cfg, store, sup, loop = build_system()
+        cfg, store, sup, loop, _, _ = build_system()
         store.set_state_internal("run_started_at", time.time() - 200 * 3600)
         sup2 = Supervisor(cfg, Store(d))
         with self.assertRaises(SupervisorError):

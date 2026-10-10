@@ -4,6 +4,7 @@ data/STOP
 data/APPROVE_LIVE
 data/SUCCESS.json
 data/analytics.log
+data/notifications.log
 __pycache__/
 *.pyc
 .DS_Store

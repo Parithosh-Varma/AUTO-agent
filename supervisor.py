@@ -141,6 +141,52 @@ class Supervisor:
         approval = os.path.join(self.cfg.data_dir, "APPROVE_LIVE")
         return os.path.exists(approval)
 
+    # --- operator intervention (Telegram /status commands route through here) ---
+    # These never change caps, usage, deadline, or approvals; pause/resume only
+    # toggle the external kill-switch file, stop marks a terminal state.
+    def _audit(self, op, source, ok=True, note=""):
+        try:
+            cycle = self.store.get_state("cycle", 0) or 0
+            self.store.log_action(int(cycle), "supervisor", op,
+                                  {"source": str(source)[:80]}, ok, note[:500])
+        except Exception:
+            pass
+
+    def pause(self, source="operator"):
+        with open(self.cfg.kill_switch_file, "a"):
+            pass
+        try:
+            with open(self.cfg.kill_switch_file, "w") as f:
+                f.write(f"paused by {str(source)[:80]} at {time.time()}\n")
+        except OSError:
+            pass
+        self._audit("pause", source, True, "kill switch engaged; deadline unchanged")
+        return True
+
+    def resume(self, source="operator"):
+        if self.experiment_status() in TERMINAL_STATUSES:
+            raise SupervisorError(
+                f"Cannot resume: experiment terminal ({self.experiment_status()}).")
+        try:
+            if os.path.exists(self.cfg.kill_switch_file):
+                os.remove(self.cfg.kill_switch_file)
+        except OSError as e:
+            raise SupervisorError(f"Cannot resume: {e}")
+        self._audit("resume", source, True, "kill switch cleared; deadline unchanged")
+        return True
+
+    def stop(self, source="operator", reason="stopped_kill_switch"):
+        if reason not in TERMINAL_STATUSES:
+            reason = "stopped_kill_switch"
+        self.mark_terminal(reason)
+        try:
+            with open(self.cfg.kill_switch_file, "w") as f:
+                f.write(f"stopped by {str(source)[:80]} at {time.time()}\n")
+        except OSError:
+            pass
+        self._audit("stop", source, True, f"terminal={reason}; limits/deadline untouched")
+        return reason
+
     def status(self, cycle=0):
         u = self._usage()
         return {

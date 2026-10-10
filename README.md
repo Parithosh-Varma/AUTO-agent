@@ -125,6 +125,7 @@ Do not deploy to production or enable live payments without required approval.
 | Cloudflare API | **Awaiting credentials** — `CF_API_TOKEN` empty, local artifacts only |
 | Dodo Payments API | **Awaiting credentials** — `DODO_API_KEY` empty, dry-run (cannot reach $25 by design) |
 | Brave / PostHog / Sentry | **Stubs** — keys empty, local logs only |
+| Telegram Bot API | **Mocked, ready** — 15 mocked tests pass; `telegram.configured: false` here, dry-run safe |
 
 Live financial actions stay disabled (`SANDBOX_MODE=1`, `APPROVE_LIVE_PAYMENTS=0`,
 no `data/APPROVE_LIVE`). No production deploy performed.
@@ -132,9 +133,11 @@ no `data/APPROVE_LIVE`). No production deploy performed.
 ## 7. Layout
 
 ```
-config.py            env + caps (sandbox-first, 168h default)
+config.py            env + caps (sandbox-first, 168h default) + Telegram settings
 memory.py            SQLite store (D1-compatible) + protected keys + idempotent queue
+                     + notifications outbox
 supervisor.py        deadline, split spend/failure limits, kill switch, terminal states
+                     + pause/resume/stop (Telegram routes through these)
 tools/base.py        ToolResult + audited registry
 tools/llm_tool.py    OpenAI-compatible LLM, mock fallback
 tools/github_tool.py allowlist-only, dry-run mirror
@@ -143,17 +146,108 @@ tools/dodo_tool.py   authenticated verification only (origin-gated)
 tools/search_tool.py Brave API or mock
 tools/analytics_tool.py  local log (+PostHog/Sentry when keyed)
 tools/build_tool.py  real local prototypes in data/workspace + data/artifacts
+tools/telegram_tool.py  official Bot API sender/poller; delivery only on {"ok":true}
+notify/alerts.py     deduped/cooldown-guarded outbox, spend/blocker/crash detectors
+notify/commands.py   allowlisted /status /why /pause /resume /stop /report
 agent/brain.py       goal generation, ranking, planning, reflection
-agent/loop.py        Observe→Think→Act→Evaluate→Repeat + terminal guards
+agent/loop.py        Observe→Think→Act→Evaluate→Repeat + terminal guards + notifier hooks
 main.py              CLI: --once / --cycles / --daemon / --status / --reset
+                     --notify-test / --telegram-poll
 cloudflare/          schema.sql, worker.js, wrangler.toml.example
-tests/               test_agent.py (core) + test_seven_day.py (deadline/recovery/limits)
+tests/               test_agent.py + test_seven_day.py + test_telegram.py (mocked)
 ```
 
 ## 8. Current status (last verified 2026-10-10)
 
-- Commit `72578d1`, `main` in sync with origin; working tree clean before this edit.
-- `python3 -m unittest discover -s tests`: **21/21 pass**.
-- `python3 main.py --status`: cycle 13, `experiment_status: active`,
-  remaining ~167.9h of 168h, `verified_gross: $0.00 / $25.00`, `live_allowed: false`.
+- Commit `3cecb54` (+Telegram work below), `main` in sync with origin before this edit.
+- `python3 -m unittest discover -s tests`: **36/36 pass**
+  (5 core + 16 seven-day + 15 Telegram, all mocked, no live creds).
+- `python3 main.py --status`: cycle 15, `experiment_status: active`,
+  remaining ~167.5h of 168h, `verified_gross: $0.00 / $25.00`, `live_allowed: false`,
+  `telegram.configured: false`.
 - `node --check cloudflare/worker.js`: OK.
+- `python3 main.py --notify-test` without creds: prints setup hint, sends nothing.
+
+## 9. Telegram notifications + intervention
+
+Bot API only (stdlib `urllib`, no new deps). Token is never logged, never in
+outputs, never in errors (`tools/telegram_tool.py`). Delivery counts only when
+the API responds `{"ok": true}`; anything else is a recorded failure with
+backoff, retried from the SQLite outbox (`notifications` table).
+
+### 9.1 Create the bot
+
+1. Chat with `@BotFather` on Telegram: `/newbot` → name → username. Copy the
+   `123456:ABC...` token.
+2. Start a chat with your new bot (press Start) or add it to your group.
+
+### 9.2 Discover the chat ID
+
+```bash
+# after Step 1 + sending /start to the bot:
+curl "https://api.telegram.org/bot<TOKEN>/getUpdates"
+# read result[0].message.chat.id  (use the bot token only here, never commit it)
+```
+
+### 9.3 Configure
+
+```bash
+# .env (never commit):
+TELEGRAMBOTTOKEN=123456:ABC...
+TELEGRAMCHATID=123456789
+# optional:
+# TELEGRAM_ALLOWED_IDS=123456789,987654321   # defaults to TELEGRAMCHATID
+# TELEGRAM_TOKEN_FILE=/run/secrets/tg_token  # secret-manager file pattern
+# TELEGRAM_ALERT_COOLDOWN_S=3600
+# TELEGRAM_SPEND_WARN_PCT=50,80
+# TELEGRAM_POLL_ENABLED=1
+python3 main.py --status   # check telegram.configured: true (no secrets printed)
+```
+
+### 9.4 Test alerts (harmless)
+
+```bash
+python3 main.py --notify-test     # sends one test message; confirms API {"ok":true}
+python3 main.py --telegram-poll   # poll commands once (see 9.5)
+tail -f data/notifications.log
+```
+
+Without credentials `--notify-test` prints a setup hint and sends nothing;
+unit tests never need credentials (mocked transport).
+
+### 9.5 Commands (allowlisted senders only)
+
+| Command | Effect (via `Supervisor`) |
+|---|---|
+| `/status` | cycle, gross/target, remaining h, fail streak, active goal |
+| `/why` | last failing tool, error summary, streak, next action |
+| `/pause` | engage kill switch (`supervisor.pause`); deadline unchanged |
+| `/resume` | clear kill switch (`supervisor.resume`); refused when terminal |
+| `/stop` | terminal `stopped_kill_switch` + kill switch (`supervisor.stop`) |
+| `/report` | gross, usage splits, goal counts, remaining h |
+
+Unauthorized senders get no reply and no state change; the attempt is audit-logged
+(`telegram / command:*`). Unknown commands get a usage reply (authorized only).
+Every authorized state change is logged to `actions`. Commands cannot change
+caps, extend the deadline, bypass `APPROVE_LIVE` approval, or grant permissions —
+those code paths do not exist (`notify/commands.py:execute` only calls
+`pause`/`resume`/`stop`).
+
+### 9.6 What notifies you, with what detail
+
+Start, blocker-after-bounded-retries, missing credential/permission, repeated
+failures, spend thresholds (default 50/80% per metric), pause/resume/shutdown,
+$25 target, 168h deadline, crash, recovery, blocker resolution. Each message has:
+event type, current goal, affected tool, concise error, retry count, cycle,
+gross/target, runtime remaining, experiment status, next action. Secrets and
+customer emails are scrubbed (`AlertManager.scrub`).
+
+Flood control: per-event dedupe keys + `TELEGRAM_ALERT_COOLDOWN_S` cooldown;
+one-shot flags for start/target/deadline; spend warns once per threshold;
+recovery sent once when a blocker clears. A blocked goal is abandoned and work
+continues elsewhere; only supervisor-terminal events stop the whole run.
+
+Failure behavior: if Telegram is down, work continues, failures are recorded in
+`notifications` (status `failed`, exponential backoff `30·2ⁿ` ≤ 1h) plus
+`data/notifications.log`, and `flush()` retries each cycle. A failed send is
+never reported as delivered.

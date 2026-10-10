@@ -68,6 +68,13 @@ class Config:
     posthog_key: str = ""
     posthog_host: str = "https://app.posthog.com"
     sentry_dsn: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_allowed_ids: tuple = ()
+    telegram_token_file: str = ""
+    telegram_cooldown_s: int = 3600
+    telegram_spend_warn_pct: tuple = (50, 80)
+    telegram_poll_enabled: bool = True
 
 
 def get_config() -> Config:
@@ -103,4 +110,47 @@ def get_config() -> Config:
         posthog_key=_get("POSTHOG_KEY", ""),
         posthog_host=_get("POSTHOG_HOST", "https://app.posthog.com"),
         sentry_dsn=_get("SENTRY_DSN", ""),
+        telegram_bot_token=_telegram_token(),
+        telegram_chat_id=_get("TELEGRAMCHATID", "") or _get("TELEGRAM_CHAT_ID", ""),
+        telegram_allowed_ids=_telegram_allowlist(),
+        telegram_token_file=_get("TELEGRAM_TOKEN_FILE", ""),
+        telegram_cooldown_s=_int("TELEGRAM_ALERT_COOLDOWN_S", 3600),
+        telegram_spend_warn_pct=_telegram_pcts(),
+        telegram_poll_enabled=_get("TELEGRAM_POLL_ENABLED", "1") != "0",
     )
+
+
+def _telegram_token():
+    tok = _get("TELEGRAMBOTTOKEN", "") or _get("TELEGRAM_BOT_TOKEN", "")
+    if not tok:
+        path = _get("TELEGRAM_TOKEN_FILE", "")
+        if path and os.path.exists(path):
+            try:
+                with open(path) as f:
+                    tok = f.read().strip()
+            except OSError:
+                tok = ""
+    return tok
+
+
+def _telegram_allowlist():
+    raw = _get("TELEGRAM_ALLOWED_IDS", "")
+    ids = tuple(s.strip() for s in raw.split(",") if s.strip())
+    if not ids:
+        chat = _get("TELEGRAMCHATID", "") or _get("TELEGRAM_CHAT_ID", "")
+        if chat:
+            ids = (chat.strip(),)
+    return ids
+
+
+def _telegram_pcts():
+    raw = _get("TELEGRAM_SPEND_WARN_PCT", "50,80")
+    out = []
+    for part in raw.split(","):
+        try:
+            v = float(part.strip())
+        except ValueError:
+            continue
+        if 0 < v < 100:
+            out.append(v)
+    return tuple(sorted(out)) or (50.0, 80.0)

@@ -97,7 +97,7 @@ class TestLoop(unittest.TestCase):
         os.environ["CYCLE_SLEEP_SECONDS"] = "0"
         os.environ["MAX_RUNTIME_HOURS"] = "168"
         from main import build_system
-        cfg, store, sup, loop = build_system()
+        cfg, store, sup, loop, _, _ = build_system()
         res = loop.run(max_cycles=6, sleep=False)
         self.assertIn("gross", res)
         self.assertTrue(os.path.exists(os.path.join(d, "agent.db")))
