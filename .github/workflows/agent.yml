@@ -34,6 +34,7 @@ jobs:
           DASHBOARD_API_URL: ${{ secrets.DASHBOARD_API_URL }}
           DASHBOARD_TOKEN: ${{ secrets.DASHBOARD_TOKEN }}
           DODO_API_KEY: ${{ secrets.DODO_API_KEY }}
+          AGENT_GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: "https://integrate.api.nvidia.com/v1"
           LLM_MODEL: "meta/muse-glimmer-30b"

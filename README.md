@@ -41,7 +41,7 @@ python3 main.py --status
 | `CYCLE_SLEEP_SECONDS` | `5` | Pause between daemon cycles |
 | `DATA_DIR` / `KILL_SWITCH_FILE` | `./data`, `./data/STOP` | State dir / external kill switch |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | `https://integrate.api.nvidia.com/v1`, —, `meta/muse-glimmer-30b` | NVIDIA NIM; muse-glimmer-30b only; blank key = mock |
-| `GITHUB_TOKEN`, `AGENT_ALLOWED_REPOS` | — | Blank = dry-run mirror; else allowlist-only |
+| `AGENT_GITHUB_TOKEN`, `AGENT_ALLOWED_REPOS` | — | `GITHUB_*` names are reserved by Actions; blank = dry-run mirror, else allowlist-only |
 | `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `CF_ZONE_ID` | — | Blank = local artifacts; else verify + wrangler |
 | `DODO_API_KEY`, `DODO_MODE`, `DODO_BASE_URL` | `test` | Blank = dry-run (cannot succeed); live needs approval |
 | `BRAVE_API_KEY`, `POSTHOG_KEY`, `POSTHOG_HOST`, `SENTRY_DSN` | — | Optional; blank = stubs |
@@ -121,7 +121,7 @@ Do not deploy to production or enable live payments without required approval.
 | Deadline / crash recovery / limits / termination | **Verified** (unit-tested incl. real `data/agent.db` migration) |
 | `cloudflare/worker.js` syntax | **Verified** (`node --check`) |
 | LLM (NVIDIA NIM) | **Mocked** — `LLM_API_KEY` empty; with a key, `meta/muse-glimmer-30b` only, no fallback |
-| GitHub API | **Awaiting credentials** — needs valid `GITHUB_TOKEN` + `AGENT_ALLOWED_REPOS`; dry-run mirror only |
+| GitHub API | **Awaiting credentials** — needs valid `AGENT_GITHUB_TOKEN` + `AGENT_ALLOWED_REPOS`; dry-run mirror only |
 | Cloudflare API | **Awaiting credentials** — `CF_API_TOKEN` empty, local artifacts only |
 | Dodo Payments API | **Awaiting credentials** — `DODO_API_KEY` empty, dry-run (cannot reach $25 by design) |
 | Brave / PostHog / Sentry | **Stubs** — keys empty, local logs only |

@@ -105,7 +105,10 @@ def get_config() -> Config:
         llm_base_url=_get("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
         llm_api_key=_get("LLM_API_KEY", ""),
         llm_model=_get("LLM_MODEL", "meta/muse-glimmer-30b"),
-        github_token=_get("GITHUB_TOKEN", ""),
+        # AGENT_GITHUB_TOKEN: GitHub blocks secrets named GITHUB_* (reserved
+        # for the auto-provided Actions token), so the agent's own credential
+        # uses the AGENT_ prefix. GITHUB_TOKEN kept as a fallback.
+        github_token=_get("AGENT_GITHUB_TOKEN", "") or _get("GITHUB_TOKEN", ""),
         allowed_repos=allowed,
         cf_api_token=_get("CF_API_TOKEN", ""),
         cf_account_id=_get("CF_ACCOUNT_ID", ""),

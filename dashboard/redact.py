@@ -18,7 +18,8 @@ MAX_LEN = 2000
 def known_secrets():
     vals = []
     for name in ("DASHBOARD_TOKEN", "TELEGRAMBOTTOKEN", "TELEGRAM_BOT_TOKEN",
-                 "LLM_API_KEY", "GITHUB_TOKEN", "CF_API_TOKEN",
+                 "LLM_API_KEY", "GITHUB_TOKEN", "AGENT_GITHUB_TOKEN",
+                 "CF_API_TOKEN",
                  "DODO_API_KEY", "DODO_WEBHOOK_SECRET", "BRAVE_API_KEY",
                  "POSTHOG_KEY", "SENTRY_DSN"):
         v = os.environ.get(name, "")
