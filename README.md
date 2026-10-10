@@ -41,7 +41,7 @@ python3 main.py --status
 | `CYCLE_SLEEP_SECONDS` | `5` | Pause between daemon cycles |
 | `DATA_DIR` / `KILL_SWITCH_FILE` | `./data`, `./data/STOP` | State dir / external kill switch |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | `https://integrate.api.nvidia.com/v1`, —, `meta/muse-glimmer-30b` | NVIDIA NIM; muse-glimmer-30b only; blank key = mock |
-| `AGENT_GITHUB_TOKEN`, `AGENT_ALLOWED_REPOS` | — | `GITHUB_*` names are reserved by Actions; blank = dry-run mirror, else allowlist-only |
+| `AGENT_GITHUB_TOKEN`, `AGENT_ALLOWED_REPOS` | — | `GITHUB_*` names are reserved by Actions; blank = dry-run mirror. Created repos are always private (code-enforced) and auto-writable |
 | `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `CF_ZONE_ID` | — | Blank = local artifacts; else verify + wrangler |
 | `DODO_API_KEY`, `DODO_MODE`, `DODO_BASE_URL` | `test` | Blank = dry-run (cannot succeed); live needs approval |
 | `BRAVE_API_KEY`, `POSTHOG_KEY`, `POSTHOG_HOST`, `SENTRY_DSN` | — | Optional; blank = stubs |
