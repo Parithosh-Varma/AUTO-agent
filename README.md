@@ -14,8 +14,8 @@ and strategies. No live charges without explicit approval.
 ## 1. Setup (exact)
 
 ```bash
-cd /Users/varma/Downloads/IMP/AUTO-agent
-python3 --version          # 3.9+ (stdlib only for core)
+cd AUTO-agent   # clone of https://github.com/Parithosh-Varma/AUTO-agent
+python3 --version          # 3.9+ (stdlib only for core; tested on 3.9.6)
 cp -n .env.example .env    # create once; never commit .env
 pip install -r requirements.txt   # optional; core runs on stdlib
 python3 -m unittest discover -s tests -v
@@ -128,3 +128,32 @@ Do not deploy to production or enable live payments without required approval.
 
 Live financial actions stay disabled (`SANDBOX_MODE=1`, `APPROVE_LIVE_PAYMENTS=0`,
 no `data/APPROVE_LIVE`). No production deploy performed.
+
+## 7. Layout
+
+```
+config.py            env + caps (sandbox-first, 168h default)
+memory.py            SQLite store (D1-compatible) + protected keys + idempotent queue
+supervisor.py        deadline, split spend/failure limits, kill switch, terminal states
+tools/base.py        ToolResult + audited registry
+tools/llm_tool.py    OpenAI-compatible LLM, mock fallback
+tools/github_tool.py allowlist-only, dry-run mirror
+tools/cloudflare_tool.py  deploy/r2/queue abstractions
+tools/dodo_tool.py   authenticated verification only (origin-gated)
+tools/search_tool.py Brave API or mock
+tools/analytics_tool.py  local log (+PostHog/Sentry when keyed)
+tools/build_tool.py  real local prototypes in data/workspace + data/artifacts
+agent/brain.py       goal generation, ranking, planning, reflection
+agent/loop.py        Observe→Think→Act→Evaluate→Repeat + terminal guards
+main.py              CLI: --once / --cycles / --daemon / --status / --reset
+cloudflare/          schema.sql, worker.js, wrangler.toml.example
+tests/               test_agent.py (core) + test_seven_day.py (deadline/recovery/limits)
+```
+
+## 8. Current status (last verified 2026-10-10)
+
+- Commit `72578d1`, `main` in sync with origin; working tree clean before this edit.
+- `python3 -m unittest discover -s tests`: **21/21 pass**.
+- `python3 main.py --status`: cycle 13, `experiment_status: active`,
+  remaining ~167.9h of 168h, `verified_gross: $0.00 / $25.00`, `live_allowed: false`.
+- `node --check cloudflare/worker.js`: OK.
