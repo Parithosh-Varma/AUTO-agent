@@ -1,0 +1,24 @@
+name = "auto-agent"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "MEMORY"
+database_name = "auto_memory"
+database_id = "REPLACE_ME"
+
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "auto-artifacts"
+
+[[queues.producers]]
+binding = "JOBS"
+queue = "auto-jobs"
+
+[[queues.consumers]]
+queue = "auto-jobs"
+max_batch_size = 5
+
+# cron: wake agent every 5 min
+# [triggers]
+# crons = ["*/5 * * * *"]

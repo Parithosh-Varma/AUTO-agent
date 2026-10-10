@@ -1,0 +1,9 @@
+.env
+data/agent.db
+data/STOP
+data/APPROVE_LIVE
+data/SUCCESS.json
+data/analytics.log
+__pycache__/
+*.pyc
+.DS_Store

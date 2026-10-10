@@ -1,0 +1,7 @@
+# stdlib only for core run. Optional telemetry/search get real clients.
+# pip install -r requirements.txt
+requests>=2.31
+python-dotenv>=1.0
+# optional:
+# posthog>=3.0
+# sentry-sdk>=2.0
