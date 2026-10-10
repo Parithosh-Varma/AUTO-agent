@@ -342,8 +342,9 @@ checkout. Remaining, in order:
    `CLOUDFLARE_API_TOKEN` (Workers/D1/Pages edit + Account read),
    `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_DATABASE_ID` (step 1),
    plus `DASHBOARD_API_URL` (worker URL after first deploy), `DASHBOARD_TOKEN`.
-3. Repo Settings → Environments → New environment `production` (required
-   reviewers = you). The `deploy` job waits for your approval every run.
+3. `production` environment: already created with you as required reviewer —
+   every `deploy` job waits for your approval. Verify at repo Settings →
+   Environments → production.
 4. Run the workflow (Actions → agent → Run workflow). It renders
    `wrangler.toml` from the example (ID injected, never logged), applies D1
    migrations, deploys the Worker, then the Pages frontend.
