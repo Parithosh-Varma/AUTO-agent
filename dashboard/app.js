@@ -85,14 +85,13 @@ function renderOverview(ov){
   $("#tab-overview").innerHTML=
    '<div class="grid">'
   +'<div class="card"><h3>status</h3><div class="big">'+esc(ov.status)+'</div><div class="mut">'+esc(ov.terminal_reason||"active")+(ov.kill_switch?' · paused (kill switch)':"")+'</div></div>'
-  +'<div class="card"><h3>revenue</h3><div class="big">'+money(ov.verified_gross_usd)+' <span class="mut">/ '+money(ov.target_usd)+'</span></div>'+bar(pct,pct>=100?"ok":"")+ stunt(ov)+'</div>'
+  +'<div class="card hero"><h3>revenue</h3><div class="big">'+money(ov.verified_gross_usd)+' <span class="mut">/ '+money(ov.target_usd)+'</span></div>'+bar(pct,pct>=100?"ok":"")+'</div>'
   +'<div class="card"><h3>time</h3><div>elapsed <b>'+ov.elapsed_hours.toFixed(1)+'h</b> · left <b>'+ov.remaining_hours.toFixed(1)+'h</b></div><div class="mut">start '+esc(st)+'<br>deadline '+esc(dl)+'</div></div>'
   +'<div class="card"><h3>spend</h3><div>LLM '+money(ov.usage.llm_spend_usd)+' · infra '+money(ov.usage.infra_spend_usd)+'</div><div class="mut">calls '+ov.usage.llm_calls+' llm / '+ov.usage.tool_calls+' tools</div></div>'
   +'</div>'
   +'<div class="card"><h3>right now</h3><div>'+esc((ov.current_goal||{}).description||"no active goal")+'</div><div class="mut">next: '+esc(ov.next_action||"-")+'</div></div>'
   +'<div class="grid"><div class="card"><h3>last success</h3><div>'+esc(JSON.stringify(ov.last_ok||"none"))+'</div></div>'
   +'<div class="card"><h3>latest error</h3><div class="'+(ov.last_error?"err":"")+'">'+esc((ov.last_error||{}).summary||(ov.last_error?JSON.stringify(ov.last_error):"none"))+'</div></div></div>';
-  function stunt(){return "";}
 }
 function renderEvents(d){
   const list=$("#evList");
