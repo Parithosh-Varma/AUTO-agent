@@ -29,7 +29,10 @@ class LLMTool:
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.7,
-                "max_tokens": 800,
+                # muse-glimmer is a reasoning model: it spends tokens on a
+                # hidden reasoning pass before any visible content.
+                "max_tokens": 2000,
+                "stream": True,
             }).encode()
             req = urllib.request.Request(
                 self.cfg.llm_base_url.rstrip("/") + "/chat/completions",
@@ -37,10 +40,16 @@ class LLMTool:
                 headers={"Content-Type": "application/json",
                          "Authorization": f"Bearer {self.cfg.llm_api_key}"},
             )
-            with urllib.request.urlopen(req, timeout=60) as r:
-                payload = json.loads(r.read().decode())
-            text = payload["choices"][0]["message"]["content"]
-            return ToolResult(ok=True, output=text, data={"model": self.cfg.llm_model})
+            text, usage = self._read_stream(req)
+            if not text.strip():
+                return ToolResult(ok=False,
+                                  output="llm returned empty content "
+                                         "(reasoning-only or token limit)",
+                                  data={"model": self.cfg.llm_model, "usage": usage})
+            data = {"model": self.cfg.llm_model}
+            if usage:
+                data["usage"] = usage
+            return ToolResult(ok=True, output=text, data=data)
         except Exception as e:
             # Strict mode: a configured key must never be silently replaced by
             # mock output. Fail the call so the supervisor records a real
@@ -48,6 +57,41 @@ class LLMTool:
             return ToolResult(ok=False,
                               output=f"llm call failed ({self.cfg.llm_model}): {e}",
                               data={"model": self.cfg.llm_model, "error": str(e)})
+
+    def _read_stream(self, req):
+        """Read an SSE chat-completion stream (or a plain JSON body if the
+        endpoint ignores `stream`). Returns (content, usage)."""
+        parts, usage = [], None
+        with urllib.request.urlopen(req, timeout=120) as r:
+            buf = ""
+            while True:
+                chunk = r.read(4096)
+                if not chunk:
+                    break
+                buf += chunk.decode(errors="replace")
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        return "".join(parts), usage
+                    try:
+                        d = json.loads(payload)
+                    except ValueError:
+                        continue
+                    usage = d.get("usage") or usage
+                    delta = (d.get("choices") or [{}])[0].get("delta") or {}
+                    if delta.get("content"):
+                        parts.append(delta["content"])
+        text = "".join(parts)
+        if not text and buf.strip().startswith("{"):
+            d = json.loads(buf)
+            msg = (d.get("choices") or [{}])[0].get("message") or {}
+            text = msg.get("content") or ""
+            usage = d.get("usage") or usage
+        return text, usage
 
     def _mock(self, prompt):
         p = prompt.lower()
