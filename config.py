@@ -75,6 +75,12 @@ class Config:
     telegram_cooldown_s: int = 3600
     telegram_spend_warn_pct: tuple = (50, 80)
     telegram_poll_enabled: bool = True
+    dashboard_token: str = ""
+    dashboard_token_file: str = ""
+    dashboard_api_url: str = ""
+    dashboard_port: int = 8787
+    dashboard_poll_s: int = 5
+    dodo_fee_pct: float = 0.0
 
 
 def get_config() -> Config:
@@ -117,7 +123,26 @@ def get_config() -> Config:
         telegram_cooldown_s=_int("TELEGRAM_ALERT_COOLDOWN_S", 3600),
         telegram_spend_warn_pct=_telegram_pcts(),
         telegram_poll_enabled=_get("TELEGRAM_POLL_ENABLED", "1") != "0",
+        dashboard_token=_dashboard_token(),
+        dashboard_token_file=_get("DASHBOARD_TOKEN_FILE", ""),
+        dashboard_api_url=_get("DASHBOARD_API_URL", "").rstrip("/"),
+        dashboard_port=_int("DASHBOARD_PORT", 8787),
+        dashboard_poll_s=_int("DASHBOARD_POLL_S", 5),
+        dodo_fee_pct=_float("DODO_FEE_PCT", 0.0),
     )
+
+
+def _dashboard_token():
+    tok = _get("DASHBOARD_TOKEN", "")
+    if not tok:
+        path = _get("DASHBOARD_TOKEN_FILE", "")
+        if path and os.path.exists(path):
+            try:
+                with open(path) as f:
+                    tok = f.read().strip()
+            except OSError:
+                tok = ""
+    return tok
 
 
 def _telegram_token():

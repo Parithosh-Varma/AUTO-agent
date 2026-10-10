@@ -6,6 +6,7 @@ compatibility_date = "2024-01-01"
 binding = "MEMORY"
 database_name = "auto_memory"
 database_id = "REPLACE_ME"
+migrations_dir = "migrations"
 
 [[r2_buckets]]
 binding = "ARTIFACTS"

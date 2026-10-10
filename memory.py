@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
 import time
 
 # Agent code must never write these directly; only Supervisor/loop internals may.
@@ -100,7 +101,89 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at REAL DEFAULT 0,
   sent_at REAL DEFAULT 0
 );
+-- Observability: append-only event stream (D1-compatible). History is preserved;
+-- duplicates collapse on idempotency_key, rows are never updated in place.
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT UNIQUE NOT NULL,
+  idempotency_key TEXT UNIQUE NOT NULL,
+  ts REAL NOT NULL,
+  severity TEXT DEFAULT 'info',
+  category TEXT NOT NULL,
+  goal_id INTEGER DEFAULT 0,
+  task_id INTEGER DEFAULT 0,
+  summary TEXT NOT NULL,
+  details_json TEXT DEFAULT '{}',
+  cycle INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);
+CREATE INDEX IF NOT EXISTS idx_events_goal ON events(goal_id);
+CREATE TABLE IF NOT EXISTS tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_id INTEGER DEFAULT 0,
+  title TEXT NOT NULL,
+  status TEXT DEFAULT 'pending',
+  evidence TEXT DEFAULT '',
+  created_at REAL DEFAULT 0,
+  updated_at REAL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS usage_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cycle INTEGER DEFAULT 0,
+  usage_json TEXT DEFAULT '{}',
+  created_at REAL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS payment_recon (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  gross REAL DEFAULT 0,
+  refunded REAL DEFAULT 0,
+  fee_estimate REAL DEFAULT 0,
+  profit_estimate REAL DEFAULT 0,
+  source TEXT DEFAULT 'dodo_api',
+  basis TEXT DEFAULT 'provider',
+  created_at REAL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS approvals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  context_json TEXT DEFAULT '{}',
+  status TEXT DEFAULT 'pending',
+  created_by TEXT DEFAULT 'agent',
+  decided_by TEXT DEFAULT '',
+  created_at REAL DEFAULT 0,
+  decided_at REAL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor TEXT NOT NULL,
+  command TEXT NOT NULL,
+  ok INTEGER DEFAULT 1,
+  note TEXT DEFAULT '',
+  created_at REAL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(created_at);
 """
+
+
+class _LockedConn:
+    """Serialize cross-thread SQLite access (dashboard server threads).
+
+    The agent loop stays single-threaded; the lock only engages when the
+    local dashboard API serves requests from worker threads.
+    """
+    def __init__(self, conn):
+        self._conn = conn
+        self._lock = threading.RLock()
+
+    def __getattr__(self, name):
+        attr = getattr(self._conn, name)
+        if callable(attr):
+            def wrapper(*a, **k):
+                with self._lock:
+                    return attr(*a, **k)
+            return wrapper
+        return attr
 
 
 class Store:
@@ -109,8 +192,9 @@ class Store:
         os.makedirs(data_dir, exist_ok=True)
         os.makedirs(os.path.join(data_dir, "artifacts"), exist_ok=True)
         self.db_path = os.path.join(data_dir, "agent.db")
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
+        raw = sqlite3.connect(self.db_path, check_same_thread=False)
+        raw.row_factory = sqlite3.Row
+        self.conn = _LockedConn(raw)
         self.conn.executescript(SCHEMA)
         self.conn.commit()
         self._migrate()
@@ -339,6 +423,194 @@ class Store:
         rows = self.conn.execute(
             "SELECT status, COUNT(*) AS c FROM notifications GROUP BY status").fetchall()
         return {r["status"]: r["c"] for r in rows}
+
+    # --- observability events (append-only; idempotent; redacted) ---
+    def record_event(self, category, summary, severity="info", goal_id=0, task_id=0,
+                     details=None, cycle=0, idempotency_key=None):
+        try:
+            from dashboard.redact import scrub, scrub_dict
+            summary = scrub(summary)
+            details = scrub_dict(details or {})
+        except Exception:
+            details = details or {}
+        now = time.time()
+        if severity not in ("info", "warn", "error"):
+            severity = "info"
+        if idempotency_key is None:
+            raw = f"{cycle}:{category}:{goal_id}:{task_id}:{summary}"
+            idempotency_key = hashlib.sha256(raw.encode()).hexdigest()[:32]
+        event_id = f"ev_{int(now * 1000)}_{idempotency_key[:8]}"
+        try:
+            cur = self.conn.execute(
+                "INSERT INTO events(event_id,idempotency_key,ts,severity,category,goal_id,"
+                " task_id,summary,details_json,cycle) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (event_id, idempotency_key, now, severity, category, goal_id, task_id,
+                 summary[:500], json.dumps(details)[:4000], cycle),
+            )
+            self.conn.commit()
+            return cur.lastrowid, True
+        except sqlite3.IntegrityError:
+            row = self.conn.execute(
+                "SELECT id FROM events WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+            if row:
+                return row["id"], False
+            # event_id collision (same ms): retry with unique suffix
+            event_id = f"ev_{int(now * 1000)}_{os.urandom(4).hex()}"
+            cur = self.conn.execute(
+                "INSERT INTO events(event_id,idempotency_key,ts,severity,category,goal_id,"
+                " task_id,summary,details_json,cycle) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (event_id, idempotency_key, now, severity, category, goal_id, task_id,
+                 summary[:500], json.dumps(details)[:4000], cycle),
+            )
+            self.conn.commit()
+            return cur.lastrowid, True
+
+    def list_events(self, severity=None, category=None, goal_id=None, since=None,
+                    search=None, page=1, per_page=50):
+        per_page = max(1, min(int(per_page or 50), 200))
+        page = max(1, int(page or 1))
+        conds, args = [], []
+        if severity in ("info", "warn", "error"):
+            conds.append("severity=?")
+            args.append(severity)
+        if category:
+            conds.append("category=?")
+            args.append(category)
+        if goal_id is not None:
+            conds.append("goal_id=?")
+            args.append(int(goal_id))
+        if since:
+            conds.append("ts>=?")
+            args.append(float(since))
+        if search:
+            conds.append("(summary LIKE ?)")
+            args.append(f"%{search[:80]}%")
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+        total = self.conn.execute(f"SELECT COUNT(*) AS c FROM events{where}", args).fetchone()["c"]
+        rows = self.conn.execute(
+            f"SELECT * FROM events{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            args + [per_page, (page - 1) * per_page]).fetchall()
+        return [dict(r) for r in rows], int(total)
+
+    # --- tasks / subtasks ---
+    def add_task(self, goal_id, title, status="pending", evidence=""):
+        now = time.time()
+        cur = self.conn.execute(
+            "INSERT INTO tasks(goal_id,title,status,evidence,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?)", (goal_id, title[:300], status, evidence[:1000], now, now))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def update_task(self, task_id, status=None, evidence=None):
+        t = self.conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not t:
+            return False
+        d = dict(t)
+        if status:
+            d["status"] = status
+        if evidence is not None:
+            d["evidence"] = evidence[:1000]
+        d["updated_at"] = time.time()
+        self.conn.execute("UPDATE tasks SET status=?, evidence=?, updated_at=? WHERE id=?",
+                          (d["status"], d["evidence"], d["updated_at"], task_id))
+        self.conn.commit()
+        return True
+
+    def list_tasks(self, goal_id=None, status=None):
+        conds, args = [], []
+        if goal_id is not None:
+            conds.append("goal_id=?")
+            args.append(int(goal_id))
+        if status:
+            conds.append("status=?")
+            args.append(status)
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+        rows = self.conn.execute(f"SELECT * FROM tasks{where} ORDER BY id DESC LIMIT 200", args).fetchall()
+        return [dict(r) for r in rows]
+
+    # --- usage + reconciliation snapshots ---
+    def snapshot_usage(self, cycle, usage):
+        self.conn.execute("INSERT INTO usage_snapshots(cycle,usage_json,created_at) VALUES(?,?,?)",
+                          (cycle, json.dumps(usage)[:2000], time.time()))
+        self.conn.commit()
+
+    def latest_usage(self):
+        row = self.conn.execute("SELECT * FROM usage_snapshots ORDER BY id DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+
+    def add_recon(self, gross, refunded, fee_estimate, profit_estimate,
+                  source="dodo_api", basis="provider"):
+        cur = self.conn.execute(
+            "INSERT INTO payment_recon(gross,refunded,fee_estimate,profit_estimate,source,basis,created_at)"
+            " VALUES(?,?,?,?,?,?,?)",
+            (gross, refunded, fee_estimate, profit_estimate, source, basis, time.time()))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def latest_recon(self):
+        row = self.conn.execute("SELECT * FROM payment_recon ORDER BY id DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+
+    # --- human approvals ---
+    def request_approval(self, kind, context=None, created_by="agent"):
+        try:
+            from dashboard.redact import scrub_dict
+            context = scrub_dict(context or {})
+        except Exception:
+            context = context or {}
+        cur = self.conn.execute(
+            "INSERT INTO approvals(kind,context_json,status,created_by,decided_by,created_at,decided_at)"
+            " VALUES(?,?, 'pending',?, '',?,0)",
+            (kind[:80], json.dumps(context)[:2000], created_by[:80], time.time()))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def decide_approval(self, approval_id, approve, decided_by):
+        a = self.conn.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()
+        if not a or dict(a)["status"] != "pending":
+            return None
+        status = "approved" if approve else "denied"
+        self.conn.execute("UPDATE approvals SET status=?, decided_by=?, decided_at=? WHERE id=?",
+                          (status, decided_by[:80], time.time(), approval_id))
+        self.conn.commit()
+        return status
+
+    def pending_approvals(self):
+        rows = self.conn.execute("SELECT * FROM approvals WHERE status='pending' ORDER BY id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+    # --- independent audit trail for operator commands ---
+    def audit_log(self, actor, command, ok=True, note=""):
+        try:
+            from dashboard.redact import scrub
+            note = scrub(note)
+        except Exception:
+            pass
+        cur = self.conn.execute("INSERT INTO audit(actor,command,ok,note,created_at) VALUES(?,?,?,?,?)",
+                                (actor[:80], command[:80], 1 if ok else 0, note[:1000], time.time()))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def list_audit(self, page=1, per_page=50):
+        per_page = max(1, min(int(per_page or 50), 200))
+        page = max(1, int(page or 1))
+        total = self.conn.execute("SELECT COUNT(*) AS c FROM audit").fetchone()["c"]
+        rows = self.conn.execute("SELECT * FROM audit ORDER BY id DESC LIMIT ? OFFSET ?",
+                                 (per_page, (page - 1) * per_page)).fetchall()
+        return [dict(r) for r in rows], int(total)
+
+    # --- sync cursors (runner -> D1; never moves the deadline) ---
+    def events_since(self, last_id=0, limit=200):
+        rows = self.conn.execute(
+            "SELECT * FROM events WHERE id>? ORDER BY id ASC LIMIT ?",
+            (int(last_id or 0), max(1, min(int(limit or 200), 500)))).fetchall()
+        return [dict(r) for r in rows]
+
+    def audit_since(self, last_id=0, limit=200):
+        rows = self.conn.execute(
+            "SELECT * FROM audit WHERE id>? ORDER BY id ASC LIMIT ?",
+            (int(last_id or 0), max(1, min(int(limit or 200), 500)))).fetchall()
+        return [dict(r) for r in rows]
 
     # --- payments (mirror of verified Dodo records) ---
     def upsert_payment(self, dodo_payment_id, amount, currency="USD", status="unknown",

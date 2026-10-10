@@ -149,6 +149,7 @@ class Supervisor:
             cycle = self.store.get_state("cycle", 0) or 0
             self.store.log_action(int(cycle), "supervisor", op,
                                   {"source": str(source)[:80]}, ok, note[:500])
+            self.store.audit_log(str(source)[:80], op, ok, note[:500])
         except Exception:
             pass
 

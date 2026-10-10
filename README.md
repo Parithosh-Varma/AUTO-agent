@@ -126,6 +126,8 @@ Do not deploy to production or enable live payments without required approval.
 | Dodo Payments API | **Awaiting credentials** — `DODO_API_KEY` empty, dry-run (cannot reach $25 by design) |
 | Brave / PostHog / Sentry | **Stubs** — keys empty, local logs only |
 | Telegram Bot API | **Mocked, ready** — 15 mocked tests pass; `telegram.configured: false` here, dry-run safe |
+| Dashboard API (local) | **Verified** — token-gated, live smoke test (overview/events/diagnostic) |
+| Cloudflare Pages/Worker deploy | **Not deployed** — wrangler missing, no account ID; see §10.5 |
 
 Live financial actions stay disabled (`SANDBOX_MODE=1`, `APPROVE_LIVE_PAYMENTS=0`,
 no `data/APPROVE_LIVE`). No production deploy performed.
@@ -152,21 +154,30 @@ notify/commands.py   allowlisted /status /why /pause /resume /stop /report
 agent/brain.py       goal generation, ranking, planning, reflection
 agent/loop.py        Observe→Think→Act→Evaluate→Repeat + terminal guards + notifier hooks
 main.py              CLI: --once / --cycles / --daemon / --status / --reset
-                     --notify-test / --telegram-poll
-cloudflare/          schema.sql, worker.js, wrangler.toml.example
+                     --notify-test / --telegram-poll / --export / --sync / --dashboard
+dashboard/           redact.py (secret choke point), api.py (authed backend, local serve),
+                     sync.py (runner↔backend push/drain), index.html/app.js/styles.css
+                     (static frontend: 6 tabs, polling, stale banner, ?demo mode)
+cloudflare/          schema.sql, migrations/0001_observability.sql, worker.js (API+D1),
+                     wrangler.toml.example
+.github/workflows/agent.yml  bounded cycles + tests + export artifact
 tests/               test_agent.py + test_seven_day.py + test_telegram.py (mocked)
+                     + test_dashboard.py (auth/ingest/redact/pagination/revenue/deadline/controls)
 ```
 
 ## 8. Current status (last verified 2026-10-10)
 
-- Commit `3cecb54` (+Telegram work below), `main` in sync with origin before this edit.
-- `python3 -m unittest discover -s tests`: **36/36 pass**
-  (5 core + 16 seven-day + 15 Telegram, all mocked, no live creds).
-- `python3 main.py --status`: cycle 15, `experiment_status: active`,
-  remaining ~167.5h of 168h, `verified_gross: $0.00 / $25.00`, `live_allowed: false`,
+- Commit `51c8be9` (+dashboard work below), `main` in sync with origin before this edit.
+- `python3 -m unittest discover -s tests`: **55/55 pass**
+  (5 core + 16 seven-day + 15 Telegram + 19 dashboard; no live creds).
+- `python3 main.py --status`: cycle 17, `experiment_status: active`,
+  remaining ~167.4h of 168h, `verified_gross: $0.00 / $25.00`, `live_allowed: false`,
   `telegram.configured: false`.
+- Local dashboard API smoke test: `/api/health` public, `/api/overview`,
+  `/api/events`, `/api/controls/diagnostic` all live behind `DASHBOARD_TOKEN`.
 - `node --check cloudflare/worker.js`: OK.
 - `python3 main.py --notify-test` without creds: prints setup hint, sends nothing.
+- Cloudflare Pages/Worker: **not deployed** (wrangler missing, no account ID).
 
 ## 9. Telegram notifications + intervention
 
@@ -251,3 +262,87 @@ Failure behavior: if Telegram is down, work continues, failures are recorded in
 `notifications` (status `failed`, exponential backoff `30·2ⁿ` ≤ 1h) plus
 `data/notifications.log`, and `flush()` retries each cycle. A failed send is
 never reported as delivered.
+
+## 10. Observability dashboard
+
+Six views (tabs): Overview · Live activity · Goals · Revenue · Infra · Controls.
+Answers: what is it doing, why this goal, what shipped/failed, spend, genuine
+revenue, blocked?, what it needs. Polls every 5s, shows last-refresh time and a
+stale banner when updates stop. Responsive desktop/mobile, with loading, error,
+and empty states throughout.
+
+### 10.1 Run locally
+
+```bash
+DASHBOARD_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(24))")
+export DASHBOARD_TOKEN
+python3 main.py --dashboard   # http://127.0.0.1:8787
+# serve the frontend separately (static files, no secrets baked in):
+cd dashboard && python3 -m http.server 8080
+# open http://127.0.0.1:8080 → token button → paste DASHBOARD_TOKEN
+```
+
+The server refuses to start without `DASHBOARD_TOKEN` (fail-closed). The token
+lives in `sessionStorage` (this tab only). Demo mode without a backend:
+`python3 main.py --export`, copy `data/export.json` → `dashboard/export.json`,
+open `index.html?demo` (read-only snapshot banner).
+
+### 10.2 Secrets & access control
+
+| Secret | Where | Never in |
+|---|---|---|
+| `DASHBOARD_TOKEN` | `.env` / `DASHBOARD_TOKEN_FILE` / Worker secret | code, logs, responses |
+| `DODO_WEBHOOK_SECRET` | Worker secret only | code, responses |
+| Bot/provider keys | tool layer / env | events, errors, API output |
+
+Every `/api/*` route except `/api/health` requires
+`Authorization: Bearer <DASHBOARD_TOKEN>`. State changes accept only
+pause/resume/shutdown/diagnostic plus approval decisions, all audit-logged, all
+routed through `Supervisor` — caps, deadline, payment rows, and approvals policy
+cannot be altered here (no such endpoints exist). Inputs validated
+(page/per_page clamped, enums checked, 16KB body cap); per-IP rate limits
+(120/min reads, 10/min controls); customer data (`raw_json`, emails) never
+selected or returned. For stronger edge protection, put the Pages site behind
+Cloudflare Access (optional, recommended).
+
+### 10.3 Event model & revenue honesty
+
+Append-only `events` table (stable `event_id`, `idempotency_key` UNIQUE,
+indexes on ts/category/goal) records decisions, tool executions, deployments,
+errors, goal changes, checkpoints, and controls **as they occur** in SQLite —
+the same schema ships to D1 via `cloudflare/migrations/0001_observability.sql`.
+Runner → backend sync (`main.py --sync`, auto-drained each run, plus the
+scheduled Actions workflow) ships only events/audit rows; **payments are never
+synced** — D1 payment rows enter solely via the HMAC-verified Dodo webhook
+(403 when `DODO_WEBHOOK_SECRET` is unset) or server-side poll. Revenue endpoints
+recompute from the same `origin='dodo_api'` predicate as the agent, so the
+dashboard can never show revenue the verifier would reject. Fees/profit are
+labeled `estimate` (or `unavailable` without `DODO_FEE_PCT`); visitor metrics
+without PostHog read `unavailable` — never fabricated.
+
+### 10.4 Monitoring & troubleshooting
+
+- Stale banner ≙ no events for >~30s (`dashboard_poll_s × 6`); check daemon/Actions.
+- `python3 main.py --status` now includes a `telegram` block (configured/pending/counts).
+- `sqlite3 data/agent.db "SELECT category,severity,summary FROM events ORDER BY id DESC LIMIT 10;"`
+- 401 from API ≙ missing/wrong token; 429 ≙ slow down; 500 ≙ check server log (never contains tokens).
+- Deadline never moves: pause/resume/SQLite→D1 sync preserve `run_started_at`.
+
+### 10.5 Deployment status (honest)
+
+**Not deployed.** Verified preconditions: `node --check cloudflare/worker.js` OK,
+55/55 tests pass, local API smoke-tested. Remaining, in order:
+
+1. `npm i -g wrangler && wrangler login`; fill `database_id`/`account_id` in
+   `cloudflare/wrangler.toml` (copied from the `.example`).
+2. `wrangler d1 create auto_memory`; `wrangler d1 migrations apply auto_memory`.
+3. `wrangler secret put DASHBOARD_TOKEN`; `wrangler secret put DODO_WEBHOOK_SECRET`;
+   `wrangler deploy` (worker = API + webhook + ingest).
+4. Cloudflare Pages → connect repo, root `dashboard/`, no build command;
+   set `DASHBOARD_API_URL` secret (`main.py`/Actions) to the worker URL.
+5. Repo Actions secrets: `DASHBOARD_API_URL`, `DASHBOARD_TOKEN`
+   (plus existing `DODO_API_KEY`/`LLM_API_KEY` as authorized).
+6. Point the frontend at the worker (same-origin proxy or `DASHBOARD_API_URL`;
+   currently the app calls same-origin `/api/*`).
+7. Send one `--notify-test`-style dashboard check, confirm Telegram
+   completion alerts arrive, then start the 7-day window.

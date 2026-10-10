@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AUTO-agent Observatory</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot" id="healthDot"></span><strong>AUTO-agent</strong><span class="sub">observatory</span></div>
+  <nav id="tabs" role="tablist">
+    <button data-tab="overview" class="on">Overview</button>
+    <button data-tab="live">Live activity</button>
+    <button data-tab="goals">Goals</button>
+    <button data-tab="revenue">Revenue</button>
+    <button data-tab="infra">Infra</button>
+    <button data-tab="controls">Controls</button>
+  </nav>
+  <div class="head-right"><span id="refreshStamp">never refreshed</span><button id="loginBtn">token</button></div>
+</header>
+<div id="demoBanner" class="banner" hidden>demo snapshot — read-only, no live backend</div>
+<div id="staleBanner" class="banner warn" hidden>stale data — updates stopped arriving</div>
+<div id="errBanner" class="banner err" hidden></div>
+<main>
+  <section id="tab-overview" class="tab on"></section>
+  <section id="tab-live" class="tab" hidden>
+    <form id="filters" class="filters">
+      <input id="fSearch" type="search" placeholder="search summaries" aria-label="search">
+      <select id="fSev"><option value="">all severities</option><option>info</option><option>warn</option><option>error</option></select>
+      <select id="fCat"><option value="">all categories</option><option>decision</option><option>tool</option><option>deployment</option><option>error</option><option>retry</option><option>goal</option><option>checkpoint</option><option>audit</option><option>notification</option><option>control</option></select>
+      <select id="fRange"><option value="">all time</option><option value="3600">last hour</option><option value="86400">last 24h</option><option value="604800">last 7d</option></select>
+      <button type="submit">apply</button>
+      <span id="evCount"></span>
+    </form>
+    <div id="evList"></div>
+    <div class="pager"><button id="prevPg">‹ prev</button><span id="pgInfo"></span><button id="nextPg">next ›</button></div>
+  </section>
+  <section id="tab-goals" class="tab" hidden></section>
+  <section id="tab-revenue" class="tab" hidden></section>
+  <section id="tab-infra" class="tab" hidden></section>
+  <section id="tab-controls" class="tab" hidden></section>
+</main>
+<div id="loginModal" class="modal" hidden>
+  <form id="loginForm" class="card">
+    <h3>operator token</h3>
+    <p>Stored in this tab only (<code>sessionStorage</code>). Never baked into the page.</p>
+    <input id="tokenInput" type="password" autocomplete="off" placeholder="DASHBOARD_TOKEN">
+    <div class="row"><button type="submit">save</button><button type="button" id="loginCancel">cancel</button></div>
+  </form>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -78,6 +78,14 @@ def cmd_run(cycles, daemon):
         notifier.notify_started()
         notifier.flush()
 
+    try:
+        from dashboard import sync as dash_sync
+        n = dash_sync.drain_controls(cfg, store, sup)
+        if n:
+            log(f"[sync] applied {n} backend control request(s)")
+    except Exception:
+        pass
+
     if daemon:
         crashed = False
         while True:
@@ -187,6 +195,50 @@ def cmd_reset():
     print("reset done (workspace/artifacts kept). Use rm -rf data for full wipe.")
 
 
+def cmd_export():
+    from dashboard import api as dash_api
+    cfg, store, sup, _, _, _ = build_system()
+    cycle = int(store.get_state("cycle", 0) or 0)
+    snapshot = {
+        "exported_at": time.time(),
+        "overview": dash_api.overview(cfg, store, sup),
+        "goals": dash_api.goals_view(store),
+        "revenue": dash_api.revenue_summary(cfg, store),
+        "infra": dash_api.infra_view(cfg, store),
+    }
+    evts, total = store.list_events(page=1, per_page=200)
+    snapshot["events"] = {"events": evts, "total": total}
+    path = os.path.join(cfg.data_dir, "export.json")
+    with open(path, "w") as f:
+        json.dump(snapshot, f, indent=2)
+    print(json.dumps({"exported": path, "events": total, "cycle": cycle}, indent=2))
+
+
+def cmd_sync():
+    from dashboard import sync as dash_sync
+    cfg, store, sup, _, _, _ = build_system()
+    drained = dash_sync.drain_controls(cfg, store, sup)
+    pushed_events, pushed_audit = dash_sync.push(cfg, store)
+    print(json.dumps({"drained_controls": drained, "pushed_events": pushed_events,
+                      "pushed_audit": pushed_audit,
+                      "backend": bool((cfg.dashboard_api_url or "") and (cfg.dashboard_token or ""))},
+                     indent=2))
+
+
+def cmd_dashboard():
+    from dashboard import api as dash_api
+    cfg, store, sup, _, _, _ = build_system()
+    if not (cfg.dashboard_token or "").strip():
+        print("refusing to serve without DASHBOARD_TOKEN (fail-closed). Set it first.")
+        return
+    srv = dash_api.serve(cfg, store, sup)
+    print(f"dashboard API on http://127.0.0.1:{cfg.dashboard_port} (Ctrl-C to stop)")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser(description="Continuously autonomous revenue agent")
     ap.add_argument("--once", action="store_true", help="run 1 cycle")
@@ -198,6 +250,12 @@ def main():
                     help="send a harmless Telegram test message (needs credentials)")
     ap.add_argument("--telegram-poll", action="store_true",
                     help="poll Telegram commands once")
+    ap.add_argument("--export", action="store_true",
+                    help="write data/export.json snapshot for artifacts/demo mode")
+    ap.add_argument("--sync", action="store_true",
+                    help="push unsynced events to backend + drain control requests")
+    ap.add_argument("--dashboard", action="store_true",
+                    help="serve the local authenticated dashboard API (needs DASHBOARD_TOKEN)")
     a = ap.parse_args()
     if a.status:
         return cmd_status()
@@ -207,6 +265,12 @@ def main():
         return cmd_notify_test()
     if a.telegram_poll:
         return cmd_telegram_poll()
+    if a.export:
+        return cmd_export()
+    if a.sync:
+        return cmd_sync()
+    if a.dashboard:
+        return cmd_dashboard()
     if a.once:
         return cmd_run(1, False)
     if a.daemon:

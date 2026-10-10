@@ -32,6 +32,29 @@ class AutonomousLoop:
         except Exception:
             pass
 
+    def _emit(self, category, summary, severity="info", goal_id=0, details=None, cycle=0):
+        try:
+            self.store.record_event(category, summary, severity=severity,
+                                    goal_id=goal_id, details=details or {},
+                                    cycle=cycle)
+        except Exception:
+            pass
+
+    def _goal_event(self, goal, cycle):
+        try:
+            last = self.store.get_state("dashboard_last_goal", None)
+            if last == goal["id"]:
+                return
+            self.store.set_state("dashboard_last_goal", goal["id"])
+            self._emit("goal", f"goal #{goal['id']} active: {str(goal['description'])[:140]}",
+                       goal_id=goal["id"], cycle=cycle,
+                       details={"reason": f"score={goal.get('score')} "
+                                          f"(novelty={goal.get('novelty')}, feasibility={goal.get('feasibility')}, "
+                                          f"usefulness={goal.get('usefulness')}, cost={goal.get('cost')})",
+                                "status": goal.get("status")})
+        except Exception:
+            pass
+
     def _observe(self, tool, op, res, cycle):
         # Telegram event detectors. Never allowed to break the loop.
         try:
@@ -69,6 +92,10 @@ class AutonomousLoop:
             self.store.complete_job(job["id"], ok=True)
 
         tool, op, args = self.brain.plan_next(goal, {"cycle": cycle, "gross": gross_before})
+        self._goal_event(goal, cycle)
+        self._emit("decision", f"cycle {cycle}: {tool}.{op} for goal #{goal['id']}",
+                   goal_id=goal["id"], cycle=cycle,
+                   details={"tool": tool, "op": op, "gross_before": gross_before})
         res = self.reg.call(cycle, tool, op, args)
         # split metering: LLM vs infra vs generic tool (supervisor enforces each)
         llm_spend = LLM_COST_PER_CALL if tool == "llm" else 0.0
@@ -79,6 +106,16 @@ class AutonomousLoop:
                            llm_spend_usd=llm_spend + generic,
                            infra_spend_usd=infra_spend)
         self._observe(tool, op, res, cycle)
+        try:
+            self.store.snapshot_usage(cycle, self.sup._usage())
+        except Exception:
+            pass
+        if not res.ok:
+            fails = self.store.consecutive_failures(25)
+            self._emit("error", f"cycle {cycle}: {tool}.{op} failed (streak {fails})",
+                       severity="error", goal_id=goal["id"], cycle=cycle,
+                       details={"tool": tool, "op": op, "retries": fails,
+                                "output": (res.output or "")[:300]})
 
         # periodic hard verification (every 3 cycles + after monetize ops)
         verified = gross_before
@@ -98,9 +135,11 @@ class AutonomousLoop:
                 "note": note, "done": done}
 
     def run(self, max_cycles=None, sleep=True, on_event=None):
-        self.store.requeue_stuck()
+        requeued = self.store.requeue_stuck()
         cycle = int(self.store.get_state("cycle", 0) or 0)
         start = cycle
+        self._emit("checkpoint", f"run started at cycle {cycle} (requeued {requeued} jobs)",
+                   cycle=cycle, details={"requeued": requeued, "start_cycle": start})
         limit = max_cycles if max_cycles is not None else self.cfg.max_iterations
         while cycle - start < limit:
             try:
@@ -114,6 +153,8 @@ class AutonomousLoop:
                         self.sup.mark_terminal("deadline_expired")
                     except ValueError:
                         pass
+                self._emit("checkpoint", f"run stopped: {msg[:200]}",
+                           severity="warn", cycle=cycle, details={"reason": msg[:300]})
                 return {"stopped": msg, "cycle": cycle,
                         "gross": self.store.verified_gross(),
                         "experiment_status": self.sup.experiment_status()}
@@ -125,6 +166,8 @@ class AutonomousLoop:
             if out.get("done"):
                 if out.get("gross", 0) >= self.cfg.target_revenue_usd:
                     self._write_success()
+                    self._emit("checkpoint", "target reached; success report written",
+                               cycle=cycle, details={"gross": out["gross"]})
                     return {"success": True, "cycle": cycle, "gross": out["gross"],
                             "experiment_status": self.sup.experiment_status()}
                 # terminal but not success (deadline): stop without new tasks

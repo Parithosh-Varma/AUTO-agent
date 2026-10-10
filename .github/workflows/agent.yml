@@ -1,0 +1,48 @@
+# Bounded agent cycles. Each run is capped; state persists via --sync to D1
+# when DASHBOARD_API_URL + DASHBOARD_TOKEN secrets are configured, otherwise
+# the export.json artifact is the portable snapshot (runner FS is temporary).
+name: agent
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      cycles:
+        description: "Bounded cycles for this run"
+        required: false
+        default: "25"
+
+concurrency:
+  group: auto-agent
+  cancel-in-progress: false
+
+jobs:
+  cycles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Bounded agent cycles
+        env:
+          CYCLE_SLEEP_SECONDS: "0"
+          DASHBOARD_API_URL: ${{ secrets.DASHBOARD_API_URL }}
+          DASHBOARD_TOKEN: ${{ secrets.DASHBOARD_TOKEN }}
+          DODO_API_KEY: ${{ secrets.DODO_API_KEY }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          python3 main.py --cycles "${{ inputs.cycles || '25' }}"
+          python3 main.py --sync || true
+          python3 main.py --export || true
+      - name: Upload export snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: export-${{ github.run_number }}
+          path: data/export.json
+          if-no-files-found: warn
