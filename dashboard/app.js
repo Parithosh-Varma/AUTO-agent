@@ -39,7 +39,22 @@ async function load(){
       state.lastOk=Date.now();stamp();healthDot(ov.stale?"warn":"ok");
       $("#staleBanner").hidden=!ov.stale;
     }
-  }catch(e){if(String(e.message)!=="auth")showErr("backend unreachable: "+e.message);healthDot("err");}
+  }catch(e){
+    if(String(e.message)!=="auth")showErr("backend unreachable: "+e.message);
+    healthDot("err");renderConnectionHelp(String(e.message||""));
+  }
+}
+function renderConnectionHelp(errMsg){
+  const hasToken=!!token();
+  const base=BASE||"(same-origin)";
+  $("#tab-overview").innerHTML='<div class="card"><h3>not connected</h3>'
+    +'<div>The dashboard shows nothing until it can reach the backend API.</div>'
+    +'<table><tr><th>check</th><th>state</th></tr>'
+    +'<tr><td>API base in use</td><td>'+esc(base)+'</td></tr>'
+    +'<tr><td>operator token entered</td><td>'+(hasToken?'<span class="ok">yes</span>':'<span class="warn">no — click “token” top-right and paste DASHBOARD_TOKEN</span>')+'</td></tr>'
+    +'<tr><td>last error</td><td>'+esc(errMsg||"-")+'</td></tr></table>'
+    +'<div class="mut">Live backend is still deploying (worker URL pending). '
+    +'To preview with demo data instead, open this page with <code>?demo</code> at the end of the URL.</div></div>';
 }
 function eventsURL(){
   const p=new URLSearchParams({page:state.page,per_page:state.per});
