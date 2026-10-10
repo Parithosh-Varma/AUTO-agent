@@ -331,17 +331,24 @@ without PostHog read `unavailable` — never fabricated.
 ### 10.5 Deployment status (honest)
 
 **Not deployed.** Verified preconditions: `node --check cloudflare/worker.js` OK,
-55/55 tests pass, local API smoke-tested. Remaining, in order:
+55/55 tests pass, local API smoke-tested, workflow YAML valid. Deploy runs from
+GitHub Actions (`.github/workflows/agent.yml`, `deploy` job) — never from this
+checkout. Remaining, in order:
 
-1. `npm i -g wrangler && wrangler login`; fill `database_id`/`account_id` in
-   `cloudflare/wrangler.toml` (copied from the `.example`).
-2. `wrangler d1 create auto_memory`; `wrangler d1 migrations apply auto_memory`.
-3. `wrangler secret put DASHBOARD_TOKEN`; `wrangler secret put DODO_WEBHOOK_SECRET`;
-   `wrangler deploy` (worker = API + webhook + ingest).
-4. Cloudflare Pages → connect repo, root `dashboard/`, no build command;
-   set `DASHBOARD_API_URL` secret (`main.py`/Actions) to the worker URL.
-5. Repo Actions secrets: `DASHBOARD_API_URL`, `DASHBOARD_TOKEN`
-   (plus existing `DODO_API_KEY`/`LLM_API_KEY` as authorized).
+1. One-time Cloudflare setup (dashboard or `wrangler login` locally):
+   `wrangler d1 create auto_memory` → note its database ID; Pages → Create
+   application → Upload assets, name it `auto-agent-dashboard`.
+2. Repo Settings → Secrets and variables → Actions → New repository secret:
+   `CLOUDFLARE_API_TOKEN` (Workers/D1/Pages edit + Account read),
+   `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_DATABASE_ID` (step 1),
+   plus `DASHBOARD_API_URL` (worker URL after first deploy), `DASHBOARD_TOKEN`.
+3. Repo Settings → Environments → New environment `production` (required
+   reviewers = you). The `deploy` job waits for your approval every run.
+4. Run the workflow (Actions → agent → Run workflow). It renders
+   `wrangler.toml` from the example (ID injected, never logged), applies D1
+   migrations, deploys the Worker, then the Pages frontend.
+5. `wrangler secret put DASHBOARD_TOKEN` + `DODO_WEBHOOK_SECRET` on the worker
+   (one-time; secret values never appear in code or logs).
 6. Point the frontend at the worker (same-origin proxy or `DASHBOARD_API_URL`;
    currently the app calls same-origin `/api/*`).
 7. Send one `--notify-test`-style dashboard check, confirm Telegram

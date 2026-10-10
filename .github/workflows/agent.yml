@@ -46,3 +46,57 @@ jobs:
           name: export-${{ github.run_number }}
           path: data/export.json
           if-no-files-found: warn
+
+  # Production deploy (Worker API + D1 migrations + Pages frontend).
+  # Runs only with manual approval via the `production` environment, and only
+  # when the Cloudflare secrets below exist. Secrets are never logged.
+  # Required repo secrets (Settings → Secrets and variables → Actions):
+  #   CLOUDFLARE_API_TOKEN   (Workers/D1/Pages edit + Account read)
+  #   CLOUDFLARE_ACCOUNT_ID  (32-hex account ID)
+  #   CLOUDFLARE_DATABASE_ID (from one-time `wrangler d1 create auto_memory`)
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    needs: cycles
+    if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests
+      - name: Install wrangler
+        run: npm i -g wrangler
+      - name: Render wrangler.toml (database ID injected, never logged)
+        env:
+          CLOUDFLARE_DATABASE_ID: ${{ secrets.CLOUDFLARE_DATABASE_ID }}
+        run: |
+          python3 -c "
+          import os
+          dbid = os.environ.get('CLOUDFLARE_DATABASE_ID', '').strip()
+          assert dbid, 'CLOUDFLARE_DATABASE_ID secret is empty'
+          tpl = open('cloudflare/wrangler.toml.example').read()
+          assert 'REPLACE_ME' in tpl, 'template marker missing'
+          open('cloudflare/wrangler.toml', 'w').write(tpl.replace('REPLACE_ME', dbid))
+          print('wrangler.toml rendered')
+          "
+      - name: Apply D1 migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler d1 migrations apply auto_memory --remote --config cloudflare/wrangler.toml
+      - name: Deploy Worker API
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler deploy --config cloudflare/wrangler.toml
+      - name: Deploy Pages frontend
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: auto-agent-dashboard
+          directory: dashboard/
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
