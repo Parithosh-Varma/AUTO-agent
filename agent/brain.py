@@ -43,6 +43,10 @@ class Brain:
         return ids
 
     def pick_goal(self):
+        from memory import TERMINAL_STATUSES
+        st = self.store.get_state("experiment_status", "active")
+        if st in TERMINAL_STATUSES:
+            return None
         active = self.store.active_goal()
         if active:
             return active

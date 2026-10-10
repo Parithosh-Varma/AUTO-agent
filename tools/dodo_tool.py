@@ -11,6 +11,12 @@ from .base import ToolResult
 
 SELF_BLOCKLIST = ("agent@", "test@", "localhost", "example.com")
 
+# Any of these provider statuses never counts toward verified revenue.
+EXCLUDED_STATUSES = frozenset({
+    "refunded", "disputed", "refunding", "chargeback",
+    "failed", "canceled", "cancelled",
+})
+
 
 class DodoTool:
     name = "dodo"
@@ -36,7 +42,7 @@ class DodoTool:
     def verify(self):
         if not self.cfg.dodo_api_key:
             gross = self.store.verified_gross()
-            return ToolResult(ok=True, output=f"[dry-run] verified_gross=${gross:.2f} (no DODO_API_KEY; db mirror only)",
+            return ToolResult(ok=True, output=f"[dry-run] verified_gross=${gross:.2f} (no DODO_API_KEY; only origin='dodo_api' rows count, so dry-run cannot fabricate success)",
                               data={"verified_gross": gross, "dry_run": True})
         try:
             req = urllib.request.Request(
@@ -51,12 +57,15 @@ class DodoTool:
                 if not pid:
                     continue
                 status = p.get("status", "unknown")
-                amount = float(p.get("amount", 0) or 0) / 100.0 if p.get("amount", 0) > 100 else float(p.get("amount", 0) or 0)
+                raw_amount = float(p.get("amount", 0) or 0)
+                # Dodo amounts are minor units (cents); keep heuristic for mocks.
+                amount = raw_amount / 100.0 if raw_amount > 100 else raw_amount
                 currency = p.get("currency", self.cfg.currency)
                 is_test = 1 if (p.get("test") or p.get("mode") == "test" or self.cfg.dodo_mode == "test") else 0
-                is_refunded = 1 if status in ("refunded", "disputed", "refunding") else 0
+                is_refunded = 1 if status in EXCLUDED_STATUSES else 0
                 is_self = 1 if self._is_self(p.get("customer_email", "") or p.get("email", "")) else 0
-                self.store.upsert_payment(pid, amount, currency, status, is_test, is_refunded, is_self, p)
+                self.store.upsert_payment(pid, amount, currency, status, is_test, is_refunded, is_self, p,
+                                          origin="dodo_api")
                 n += 1
             gross = self.store.verified_gross()
             return ToolResult(ok=True, output=f"verified {n} records. verified_gross=${gross:.2f}",

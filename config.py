@@ -43,9 +43,13 @@ class Config:
     sandbox_mode: bool = True
     approve_live_payments: bool = False
     max_iterations: int = 500
-    max_runtime_hours: float = 24.0
+    max_runtime_hours: float = 168.0
     max_llm_calls: int = 1000
-    max_spend_usd: float = 10.0
+    max_tool_calls: int = 5000
+    max_llm_spend_usd: float = 10.0
+    max_infra_spend_usd: float = 25.0
+    max_spend_usd: float = 10.0  # legacy total cap, kept for backward compat
+    max_consecutive_failures: int = 25
     cycle_sleep_seconds: int = 5
     data_dir: str = "./data"
     kill_switch_file: str = "./data/STOP"
@@ -74,9 +78,13 @@ def get_config() -> Config:
         sandbox_mode=_get("SANDBOX_MODE", "1") != "0",
         approve_live_payments=_get("APPROVE_LIVE_PAYMENTS", "0") == "1",
         max_iterations=_int("MAX_ITERATIONS", 500),
-        max_runtime_hours=_float("MAX_RUNTIME_HOURS", 24),
+        max_runtime_hours=_float("MAX_RUNTIME_HOURS", _float("EXPERIMENT_HOURS", 168.0)),
         max_llm_calls=_int("MAX_LLM_CALLS", 1000),
+        max_tool_calls=_int("MAX_TOOL_CALLS", 5000),
+        max_llm_spend_usd=_float("MAX_LLM_SPEND_USD", 10.0),
+        max_infra_spend_usd=_float("MAX_INFRA_SPEND_USD", 25.0),
         max_spend_usd=_float("MAX_SPEND_USD", 10.0),
+        max_consecutive_failures=_int("MAX_CONSECUTIVE_FAILURES", 25),
         cycle_sleep_seconds=_int("CYCLE_SLEEP_SECONDS", 5),
         data_dir=_get("DATA_DIR", "./data"),
         kill_switch_file=_get("KILL_SWITCH_FILE", "./data/STOP"),

@@ -2,11 +2,26 @@
 
 Tables: state, goals, projects, actions, experiments, payments, queue.
 Revenue truth comes ONLY from Dodo API verification, never from editing this DB.
+
+Seven-day rules:
+- run_started_at is written once and never reset by restarts.
+- payments.origin='dodo_api' is required for verified_gross (manual DB edits never count).
+- queue supports dedupe_key so restarts cannot create duplicates.
 """
+import hashlib
 import json
 import os
 import sqlite3
 import time
+
+# Agent code must never write these directly; only Supervisor/loop internals may.
+PROTECTED_STATE_KEYS = frozenset({
+    "run_started_at", "caps", "usage", "experiment_status", "deadline_at",
+})
+
+TERMINAL_STATUSES = frozenset({
+    "completed_target", "deadline_expired", "stopped_kill_switch", "stopped_limits",
+})
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS state (
@@ -61,6 +76,7 @@ CREATE TABLE IF NOT EXISTS payments (
   is_test INTEGER DEFAULT 1,
   is_refunded INTEGER DEFAULT 0,
   is_self_purchase INTEGER DEFAULT 0,
+  origin TEXT DEFAULT 'manual',
   raw_json TEXT DEFAULT '{}',
   verified_at REAL DEFAULT 0
 );
@@ -70,6 +86,7 @@ CREATE TABLE IF NOT EXISTS queue (
   payload TEXT DEFAULT '{}',
   status TEXT DEFAULT 'pending',
   attempts INTEGER DEFAULT 0,
+  dedupe_key TEXT DEFAULT NULL,
   created_at REAL DEFAULT 0
 );
 """
@@ -85,6 +102,17 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self.conn.commit()
+        self._migrate()
+
+    def _migrate(self):
+        # Backward-compatible migrations for DBs created before the 7-day hardening.
+        cols_pay = {r[1] for r in self.conn.execute("PRAGMA table_info(payments)").fetchall()}
+        if "origin" not in cols_pay:
+            self.conn.execute("ALTER TABLE payments ADD COLUMN origin TEXT DEFAULT 'manual'")
+        cols_q = {r[1] for r in self.conn.execute("PRAGMA table_info(queue)").fetchall()}
+        if "dedupe_key" not in cols_q:
+            self.conn.execute("ALTER TABLE queue ADD COLUMN dedupe_key TEXT DEFAULT NULL")
+        self.conn.commit()
 
     # --- kv state ---
     def get_state(self, key, default=None):
@@ -97,6 +125,11 @@ class Store:
             return default
 
     def set_state(self, key, value):
+        if key in PROTECTED_STATE_KEYS:
+            raise PermissionError(f"state key '{key}' is supervisor-protected; agent code may not write it")
+        self.set_state_internal(key, value)
+
+    def set_state_internal(self, key, value):
         self.conn.execute(
             "INSERT INTO state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, json.dumps(value)),
@@ -191,13 +224,26 @@ class Store:
                 break
         return n
 
-    # --- queue (local equiv of Cloudflare Queues) ---
-    def enqueue(self, kind, payload):
-        self.conn.execute(
-            "INSERT INTO queue(kind,payload,status,attempts,created_at) VALUES(?,?, 'pending',0,?)",
-            (kind, json.dumps(payload), time.time()),
+    # --- queue (local equiv of Cloudflare Queues; idempotent) ---
+    def enqueue(self, kind, payload, dedupe_key=None):
+        if dedupe_key is None and isinstance(payload, dict) and payload:
+            # stable default dedupe so identical retries do not duplicate
+            raw = kind + ":" + json.dumps(payload, sort_keys=True)
+            dedupe_key = hashlib.sha256(raw.encode()).hexdigest()[:32]
+        if dedupe_key:
+            existing = self.conn.execute(
+                "SELECT id FROM queue WHERE dedupe_key=? AND status IN ('pending','claimed') LIMIT 1",
+                (dedupe_key,),
+            ).fetchone()
+            if existing:
+                return existing["id"]
+        cur = self.conn.execute(
+            "INSERT INTO queue(kind,payload,status,attempts,dedupe_key,created_at)"
+            " VALUES(?,?, 'pending',0,?,?)",
+            (kind, json.dumps(payload), dedupe_key, time.time()),
         )
         self.conn.commit()
+        return cur.lastrowid
 
     def dequeue(self):
         row = self.conn.execute(
@@ -211,31 +257,63 @@ class Store:
         d["payload"] = json.loads(d["payload"] or "{}")
         return d
 
+    def requeue_stuck(self, max_attempts=5):
+        """Crash recovery: claimed jobs left by a dead process go back to pending.
+
+        Returns number of jobs requeued. Jobs past max_attempts are marked failed.
+        """
+        stuck = self.conn.execute(
+            "SELECT id, attempts FROM queue WHERE status='claimed'"
+        ).fetchall()
+        n = 0
+        for row in stuck:
+            if row["attempts"] >= max_attempts:
+                self.conn.execute("UPDATE queue SET status='failed' WHERE id=?", (row["id"],))
+            else:
+                self.conn.execute("UPDATE queue SET status='pending' WHERE id=?", (row["id"],))
+                n += 1
+        self.conn.commit()
+        return n
+
+    def pending_count(self):
+        row = self.conn.execute("SELECT COUNT(*) AS c FROM queue WHERE status='pending'").fetchone()
+        return int(row["c"] or 0)
+
     def complete_job(self, job_id, ok=True):
         self.conn.execute(
             "UPDATE queue SET status=? WHERE id=?", ("done" if ok else "failed", job_id)
         )
         self.conn.commit()
 
+    def total_failures(self):
+        row = self.conn.execute("SELECT COUNT(*) AS c FROM actions WHERE ok=0").fetchone()
+        return int(row["c"] or 0)
+
     # --- payments (mirror of verified Dodo records) ---
     def upsert_payment(self, dodo_payment_id, amount, currency="USD", status="unknown",
-                       is_test=1, is_refunded=0, is_self_purchase=0, raw=None):
+                       is_test=1, is_refunded=0, is_self_purchase=0, raw=None,
+                       origin="manual"):
+        if origin not in ("dodo_api", "manual"):
+            origin = "manual"
         self.conn.execute(
             "INSERT INTO payments(dodo_payment_id,amount,currency,status,is_test,is_refunded,"
-            " is_self_purchase,raw_json,verified_at) VALUES(?,?,?,?,?,?,?,?,?)"
+            " is_self_purchase,origin,raw_json,verified_at) VALUES(?,?,?,?,?,?,?,?,?,?)"
             " ON CONFLICT(dodo_payment_id) DO UPDATE SET amount=excluded.amount, status=excluded.status,"
             " is_test=excluded.is_test, is_refunded=excluded.is_refunded,"
-            " is_self_purchase=excluded.is_self_purchase, raw_json=excluded.raw_json,"
-            " verified_at=excluded.verified_at",
+            " is_self_purchase=excluded.is_self_purchase, origin=excluded.origin,"
+            " raw_json=excluded.raw_json, verified_at=excluded.verified_at",
             (dodo_payment_id, amount, currency, status, is_test, is_refunded,
-             is_self_purchase, json.dumps(raw or {})[:4000], time.time()),
+             is_self_purchase, origin, json.dumps(raw or {})[:4000], time.time()),
         )
         self.conn.commit()
 
     def verified_gross(self):
+        # Authenticated provider revenue only: origin must be dodo_api, USD,
+        # succeeded, live, non-refunded/disputed, non-self-purchase.
         row = self.conn.execute(
             "SELECT COALESCE(SUM(amount),0) AS total FROM payments"
-            " WHERE status='succeeded' AND is_test=0 AND is_refunded=0 AND is_self_purchase=0"
+            " WHERE origin='dodo_api' AND status='succeeded' AND currency='USD'"
+            " AND is_test=0 AND is_refunded=0 AND is_self_purchase=0"
         ).fetchone()
         return float(row["total"] or 0.0)
 

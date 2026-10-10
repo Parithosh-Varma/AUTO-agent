@@ -20,7 +20,8 @@ class CloudflareTool:
         if op == "r2_put":
             return self._r2_put(args)
         if op == "queue_send":
-            self.store.enqueue(args.get("kind", "job"), args.get("payload", {}))
+            self.store.enqueue(args.get("kind", "job"), args.get("payload", {}),
+                               dedupe_key=args.get("dedupe_key"))
             return ToolResult(ok=True, output="queued")
         if op == "d1_query":
             return ToolResult(ok=True, output=f"verified_gross={self.store.verified_gross()}",

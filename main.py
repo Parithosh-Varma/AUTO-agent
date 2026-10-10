@@ -26,6 +26,7 @@ def build_system():
     cfg = get_config()
     store = Store(cfg.data_dir)
     sup = Supervisor(cfg, store)
+    store.requeue_stuck()
     llm = LLMTool(cfg)
     reg = Registry(store)
     dodo = DodoTool(cfg, store, sup)
